@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { rpc as SorobanRpc, xdr, Contract, Keypair, Networks, TransactionBuilder } from '@stellar/stellar-sdk'
+import { rpc as SorobanRpc, xdr, Contract } from '@stellar/stellar-sdk'
 import { RPC_URL, EXPLORER_BASE } from '../config'
+import { buildReadTx } from '../stellar'
 
 export default function PoolStatus({ contractId, refreshTick }) {
   const [state, setState] = useState(null)
@@ -118,19 +119,6 @@ function Field({ label, value, mono, trunc }) {
   )
 }
 
-// ---- helpers ----
-
-function buildReadTx(contract, method) {
-  const kp = Keypair.random()
-  const account = { accountId: () => kp.publicKey(), sequenceNumber: () => '0', incrementSequenceNumber() {} }
-  return new TransactionBuilder(account, {
-    fee: '100',
-    networkPassphrase: Networks.TESTNET,
-  })
-    .addOperation(contract.call(method))
-    .setTimeout(10)
-    .build()
-}
 
 function parseHex(sim) {
   try {
