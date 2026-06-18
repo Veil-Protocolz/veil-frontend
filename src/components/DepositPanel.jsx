@@ -1,9 +1,6 @@
 import { useState } from 'react'
 import { rpc as SorobanRpc, Networks, Contract, TransactionBuilder, xdr, Keypair } from '@stellar/stellar-sdk'
-
-const RPC_URL = 'https://soroban-testnet.stellar.org'
-const POOL_CONTRACT = 'CCSA4Q3DZ3FGABTATGWKE3EMNT6YKTUJNI7JACDX4336FJCYJJIG3KGW'
-const DENOMINATION = 10_000_000n // 1 XLM in stroops
+import { RPC_URL, POOL_CONTRACT, DENOMINATION, EXPLORER_BASE } from '../config'
 
 // BLS12-381 scalar field modulus
 const BLS_r = BigInt('0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001')
@@ -189,7 +186,7 @@ export default function DepositPanel({ onDeposited }) {
           <div style={s.successIcon}>✅</div>
           <div style={s.successText}>Deposit confirmed!</div>
           <a
-            href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+            href={`${EXPLORER_BASE}/tx/${txHash}`}
             target="_blank"
             rel="noreferrer"
             style={s.txLink}
