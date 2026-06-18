@@ -1,8 +1,6 @@
 import { useState, useRef } from 'react'
 import { rpc as SorobanRpc, Networks, Contract, TransactionBuilder, xdr, Keypair } from '@stellar/stellar-sdk'
-
-const RPC_URL = 'https://soroban-testnet.stellar.org'
-const POOL_CONTRACT = 'CCSA4Q3DZ3FGABTATGWKE3EMNT6YKTUJNI7JACDX4336FJCYJJIG3KGW'
+import { RPC_URL, POOL_CONTRACT, EXPLORER_BASE } from '../config'
 
 // BLS12-381 ZCash big-endian serialization helpers
 function fqBE(n) {
@@ -222,7 +220,7 @@ export default function WithdrawPanel({ onWithdrawn }) {
           <div style={s.successIcon}>✅</div>
           <div style={s.successText}>Withdrawal successful!</div>
           <a
-            href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+            href={`${EXPLORER_BASE}/tx/${txHash}`}
             target="_blank"
             rel="noreferrer"
             style={s.txLink}
