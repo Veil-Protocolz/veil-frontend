@@ -3,10 +3,8 @@ import DepositPanel from './components/DepositPanel'
 import WithdrawPanel from './components/WithdrawPanel'
 import PoolStatus from './components/PoolStatus'
 import SplashScreen from './components/SplashScreen'
+import { POOL_CONTRACT, RPC_URL, EXPLORER_BASE } from './config'
 import './App.css'
-
-const POOL_CONTRACT = 'CCSA4Q3DZ3FGABTATGWKE3EMNT6YKTUJNI7JACDX4336FJCYJJIG3KGW'
-const RPC_URL = 'https://soroban-testnet.stellar.org'
 
 export const POOL_CONTRACT_ID = POOL_CONTRACT
 
@@ -51,7 +49,7 @@ function Header() {
         <div style={styles.headerRight}>
           <span style={styles.tagline}>Compliant Private Payments · Stellar · ZK Groth16</span>
           <a
-            href={`https://stellar.expert/explorer/testnet/contract/${POOL_CONTRACT}`}
+            href={`${EXPLORER_BASE}/contract/${POOL_CONTRACT}`}
             target="_blank"
             rel="noreferrer"
             style={styles.contractLink}
