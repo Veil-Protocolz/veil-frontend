@@ -1,17 +1,7 @@
 import { useState, useRef } from 'react'
 import { rpc as SorobanRpc, Networks, Contract, TransactionBuilder, xdr, Keypair } from '@stellar/stellar-sdk'
 import { RPC_URL, POOL_CONTRACT, EXPLORER_BASE } from '../config'
-
-// BLS12-381 ZCash big-endian serialization helpers
-function fqBE(n) {
-  return Buffer.from(BigInt(n).toString(16).padStart(96, '0'), 'hex')
-}
-function g1ToBytes(pt) {
-  return Buffer.concat([fqBE(pt[0]), fqBE(pt[1])])
-}
-function g2ToBytes(pt) {
-  return Buffer.concat([fqBE(pt[0][1]), fqBE(pt[0][0]), fqBE(pt[1][1]), fqBE(pt[1][0])])
-}
+import { g1ToBytes, g2ToBytes, fieldToBytes32 } from '../stellar'
 
 export default function WithdrawPanel({ onWithdrawn }) {
   const [step, setStep] = useState('idle') // idle | proving | submitting | done | error
@@ -63,9 +53,6 @@ export default function WithdrawPanel({ onWithdrawn }) {
       const proofABytes = g1ToBytes(proof.pi_a)
       const proofBBytes = g2ToBytes(proof.pi_b)
       const proofCBytes = g1ToBytes(proof.pi_c)
-
-      const fieldToBytes32 = s => Buffer.from(BigInt(s).toString(16).padStart(64,'0'), 'hex')
-
       const contract = new Contract(POOL_CONTRACT)
       const recipientAddr = (recipient.trim() || meta.recipient)
 
