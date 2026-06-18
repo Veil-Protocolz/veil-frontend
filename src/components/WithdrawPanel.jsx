@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { rpc as SorobanRpc, Networks, Contract, TransactionBuilder, xdr, Keypair } from '@stellar/stellar-sdk'
 import { RPC_URL, POOL_CONTRACT, EXPLORER_BASE } from '../config'
 import { g1ToBytes, g2ToBytes, fieldToBytes32 } from '../stellar'
+import { pollTx } from '../hooks/usePollTx'
 
 export default function WithdrawPanel({ onWithdrawn }) {
   const [step, setStep] = useState('idle') // idle | proving | submitting | done | error
@@ -95,18 +96,10 @@ export default function WithdrawPanel({ onWithdrawn }) {
       const send = await server.sendTransaction(prepared)
       setTxHash(send.hash)
 
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 2000))
-        const poll = await server.getTransaction(send.hash)
-        if (poll.status === 'SUCCESS') {
-          addLog('Withdrawal confirmed!', 'success')
-          setStep('done')
-          onWithdrawn?.()
-          return
-        }
-        if (poll.status === 'FAILED') throw new Error('Transaction failed: ' + poll.resultXdr)
-      }
-      throw new Error('Timeout waiting for confirmation')
+      await pollTx(send.hash)
+      addLog('Withdrawal confirmed!', 'success')
+      setStep('done')
+      onWithdrawn?.()
     } catch (e) {
       setError(e.message)
       addLog(e.message, 'error')

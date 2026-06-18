@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { rpc as SorobanRpc, Networks, Contract, TransactionBuilder, xdr, Keypair } from '@stellar/stellar-sdk'
 import { RPC_URL, POOL_CONTRACT, DENOMINATION, EXPLORER_BASE } from '../config'
+import { pollTx } from '../hooks/usePollTx'
 
 // BLS12-381 scalar field modulus
 const BLS_r = BigInt('0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001')
@@ -90,18 +91,10 @@ export default function DepositPanel({ onDeposited }) {
       setTxHash(send.hash)
       addLog(`TX submitted: ${send.hash.slice(0,16)}…`, 'info')
 
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 2000))
-        const poll = await server.getTransaction(send.hash)
-        if (poll.status === 'SUCCESS') {
-          addLog('Deposit confirmed on-chain!', 'success')
-          setStep('done')
-          onDeposited?.()
-          return
-        }
-        if (poll.status === 'FAILED') throw new Error('Transaction failed on-chain')
-      }
-      throw new Error('Timeout waiting for confirmation')
+      await pollTx(send.hash)
+      addLog('Deposit confirmed on-chain!', 'success')
+      setStep('done')
+      onDeposited?.()
     } catch (e) {
       setError(e.message)
       addLog(e.message, 'error')
