@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { rpc as SorobanRpc, xdr, Contract, Keypair, Networks, TransactionBuilder } from '@stellar/stellar-sdk'
-
-const RPC_URL = 'https://soroban-testnet.stellar.org'
+import { RPC_URL, EXPLORER_BASE } from '../config'
 
 export default function PoolStatus({ contractId, refreshTick }) {
   const [state, setState] = useState(null)
@@ -82,7 +81,7 @@ export default function PoolStatus({ contractId, refreshTick }) {
       <div style={s.contractRow}>
         <span style={s.contractLabel}>Contract</span>
         <a
-          href={`https://stellar.expert/explorer/testnet/contract/${contractId}`}
+          href={`${EXPLORER_BASE}/contract/${contractId}`}
           target="_blank"
           rel="noreferrer"
           style={s.contractLink}
