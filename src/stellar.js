@@ -30,6 +30,6 @@ export function buildReadTx(contract, method, networkPassphrase = Networks.TESTN
     networkPassphrase,
   })
     .addOperation(contract.call(method))
-    .setTimeout(10)
+    .setTimeout(30)
     .build()
 }

@@ -60,7 +60,7 @@ export default function WithdrawPanel({ onWithdrawn }) {
     }
     const tx = new TransactionBuilder(account, { fee: '100', networkPassphrase: network.passphrase })
       .addOperation(contract.call('get_commitments'))
-      .setTimeout(10)
+      .setTimeout(30)
       .build()
     const sim = await server.simulateTransaction(tx)
     const val = SorobanRpc.Api.isSimulationSuccess(sim) ? sim.result?.retval : null
@@ -143,7 +143,7 @@ export default function WithdrawPanel({ onWithdrawn }) {
             lo:  xdr.Uint64.fromString(meta.amount),
           })),
         ))
-        .setTimeout(30)
+        .setTimeout(300)
         .build()
 
       addLog('Simulating transaction…')

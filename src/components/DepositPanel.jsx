@@ -77,7 +77,7 @@ export default function DepositPanel({ onDeposited }) {
           )),
           xdr.ScVal.scvBytes(Buffer.from(commitHex, 'hex')),
         ))
-        .setTimeout(30)
+        .setTimeout(300)
         .build()
 
       addLog('Simulating…')
