@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/update-roots.js": {
+      "maxDuration": 60
+    }
+  }
+}
