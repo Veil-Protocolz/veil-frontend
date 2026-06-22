@@ -18,6 +18,7 @@ export default function DepositPanel({ onDeposited }) {
   const wallet = useWallet()
   const [step, setStep]         = useState('idle')   // idle|generating|ready|depositing|done
   const [note, setNote]         = useState(null)
+  const [noteExpanded, setNoteExpanded] = useState(false)
   const [secretKey, setSecretKey] = useState('')
   const [showSecretKey, setShowSecretKey] = useState(false)
   const [txHash, setTxHash]     = useState(null)
@@ -198,15 +199,39 @@ export default function DepositPanel({ onDeposited }) {
       {note && (
         <div style={s.noteBox}>
           <div style={s.noteHeader}>
-            <span style={s.noteTitle}>🔑 Your Private Note</span>
-            <span style={s.noteBadge}>SECRET</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={s.noteTitle}>🔑 Your Private Note</span>
+              <span style={s.noteBadge}>SECRET</span>
+            </div>
+            <button style={s.toggleBtn} onClick={() => setNoteExpanded(v => !v)}>
+              {noteExpanded ? '▲ Hide details' : '▼ Show details'}
+            </button>
           </div>
-          <NoteRow label="Nullifier"   value={note.nullifier} />
-          <NoteRow label="Secret"      value={note.secret} />
-          <NoteRow label="Amount"      value={`${(BigInt(note.amount) / 10_000_000n).toString()} XLM`} />
-          <NoteRow label="Commitment"  value={BigInt(note.commitment).toString(16).padStart(64, '0')} />
+
+          {/* Collapsed summary */}
+          {!noteExpanded && (
+            <div style={s.noteSummary}>
+              <span style={s.noteSummaryText}>
+                Commitment: <code style={s.noteSummaryCode}>
+                  {BigInt(note.commitment).toString(16).padStart(64,'0').slice(0,12)}…
+                </code>
+              </span>
+              <span style={s.noteSummaryHint}>Details hidden for privacy</span>
+            </div>
+          )}
+
+          {/* Expanded details */}
+          {noteExpanded && (
+            <>
+              <NoteRow label="Nullifier"  value={note.nullifier} />
+              <NoteRow label="Secret"     value={note.secret} />
+              <NoteRow label="Amount"     value={`${(BigInt(note.amount) / 10_000_000n).toString()} XLM`} />
+              <NoteRow label="Commitment" value={BigInt(note.commitment).toString(16).padStart(64, '0')} />
+            </>
+          )}
+
           <div style={s.noteWarning}>
-            ⚠️ Download and store this note now. Losing it means losing access to your funds.
+            ⚠️ Download and store this note. Losing it means losing access to your funds.
           </div>
           <button style={{ ...s.btn, ...s.btnSecondary, marginTop: 10 }} onClick={downloadNote}>
             ↓ Download note.json
@@ -323,11 +348,16 @@ const s = {
   btn:         { width: '100%', padding: '11px 16px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', marginBottom: 8 },
   btnSecondary:{ background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)' },
   btnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
-  noteBox:     { background: 'var(--surface2)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: 16, marginBottom: 20 },
-  noteHeader:  { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 },
-  noteTitle:   { fontWeight: 700, color: '#e2e8f0', fontSize: 14 },
-  noteBadge:   { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: 'var(--red)', border: '1px solid rgba(239,68,68,0.3)' },
-  noteWarning: { fontSize: 12, color: '#fbbf24', marginTop: 10, lineHeight: 1.5, padding: '8px 10px', background: 'rgba(245,158,11,0.08)', borderRadius: 6, border: '1px solid rgba(245,158,11,0.2)' },
+  noteBox:        { background: 'var(--surface2)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: 16, marginBottom: 20 },
+  noteHeader:     { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  noteTitle:      { fontWeight: 700, color: '#e2e8f0', fontSize: 14 },
+  noteBadge:      { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: 'var(--red)', border: '1px solid rgba(239,68,68,0.3)' },
+  toggleBtn:      { background: 'none', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, color: '#94a3b8', fontSize: 11, padding: '3px 10px', cursor: 'pointer', whiteSpace: 'nowrap' },
+  noteSummary:    { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: 6, marginBottom: 10 },
+  noteSummaryText:{ fontSize: 12, color: '#94a3b8' },
+  noteSummaryCode:{ fontFamily: 'monospace', color: '#e2e8f0', letterSpacing: '0.02em' },
+  noteSummaryHint:{ fontSize: 11, color: 'rgba(148,163,184,0.6)', fontStyle: 'italic' },
+  noteWarning:    { fontSize: 12, color: '#fbbf24', marginTop: 10, lineHeight: 1.5, padding: '8px 10px', background: 'rgba(245,158,11,0.08)', borderRadius: 6, border: '1px solid rgba(245,158,11,0.2)' },
   signSection: { marginBottom: 20 },
   walletReady: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', marginBottom: 12 },
   dot:         { width: 8, height: 8, borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981', flexShrink: 0 },
