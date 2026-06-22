@@ -1,7 +1,10 @@
 {
   "functions": {
-    "api/update-roots.js": {
+    "api/update-roots.bundle.js": {
       "maxDuration": 60
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/api/update-roots", "destination": "/api/update-roots.bundle" }
+  ]
 }
