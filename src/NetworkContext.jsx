@@ -25,10 +25,10 @@ export const NETWORKS = {
 const NetworkContext = createContext(null)
 
 export function NetworkProvider({ children }) {
-  const [networkId, setNetworkId] = useState('testnet')
-  const network = NETWORKS[networkId]
+  const [networkKey, setNetworkKey] = useState('testnet')
+  const network = NETWORKS[networkKey]
   return (
-    <NetworkContext.Provider value={{ networkId, setNetworkId, network, NETWORKS }}>
+    <NetworkContext.Provider value={{ networkKey, setNetworkKey, network, NETWORKS }}>
       {children}
     </NetworkContext.Provider>
   )

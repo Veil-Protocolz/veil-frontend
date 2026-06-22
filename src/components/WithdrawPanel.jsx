@@ -1,19 +1,31 @@
-import { useState, useRef } from 'react'
-import { rpc as SorobanRpc, Networks, Contract, TransactionBuilder, xdr, Keypair } from '@stellar/stellar-sdk'
-import { RPC_URL, POOL_CONTRACT, EXPLORER_BASE } from '../config'
+import { useState, useRef, useEffect } from 'react'
+import { rpc as SorobanRpc, Contract, TransactionBuilder, xdr, Keypair } from '@stellar/stellar-sdk'
+import { useNetwork } from '../NetworkContext'
+import { useWallet } from '../WalletContext'
 import { g1ToBytes, g2ToBytes, fieldToBytes32 } from '../stellar'
-import { pollTx } from '../hooks/usePollTx'
 
 export default function WithdrawPanel({ onWithdrawn }) {
-  const [step, setStep] = useState('idle') // idle | proving | submitting | done | error
-  const [noteJson, setNoteJson] = useState('')
-  const [proofJson, setProofJson] = useState('')
-  const [secretKey, setSecretKey] = useState('')
-  const [recipient, setRecipient] = useState('')
-  const [txHash, setTxHash] = useState(null)
-  const [error, setError] = useState(null)
-  const [log, setLog] = useState([])
-  const fileRef = useRef()
+  const { network } = useNetwork()
+  const wallet = useWallet()
+
+  const [note, setNote]             = useState(null)   // parsed note.json
+  const [recipient, setRecipient]   = useState('')
+  const [secretKey, setSecretKey]   = useState('')
+  const [progress, setProgress]     = useState(null)   // { step, total, msg }
+  const [phase, setPhase]           = useState('idle') // idle|proving|submitting|done
+  const [txHash, setTxHash]         = useState(null)
+  const [error, setError]           = useState(null)
+  const [log, setLog]               = useState([])
+  const fileRef                     = useRef()
+  const workerRef                   = useRef()
+
+  // Pre-fill recipient from connected wallet
+  useEffect(() => {
+    if (wallet.address && !recipient) setRecipient(wallet.address)
+  }, [wallet.address])
+
+  // Cleanup worker on unmount
+  useEffect(() => () => workerRef.current?.terminate(), [])
 
   const addLog = (msg, type = 'info') => setLog(prev => [...prev, { msg, type }])
 
@@ -21,46 +33,98 @@ export default function WithdrawPanel({ onWithdrawn }) {
     const file = e.target.files[0]
     if (!file) return
     const reader = new FileReader()
-    reader.onload = evt => setNoteJson(evt.target.result)
+    reader.onload = evt => {
+      try {
+        const parsed = JSON.parse(evt.target.result)
+        if (!parsed.nullifier || !parsed.secret || !parsed.amount) {
+          setError('Invalid note.json — missing nullifier, secret, or amount.')
+          return
+        }
+        setNote(parsed)
+        setError(null)
+      } catch {
+        setError('Could not parse note.json — make sure it is a valid JSON file.')
+      }
+    }
     reader.readAsText(file)
   }
 
-  function loadProofFile(e) {
-    const file = e.target.files[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = evt => setProofJson(evt.target.result)
-    reader.readAsText(file)
+  async function fetchCommitmentsFromChain() {
+    const server = new SorobanRpc.Server(network.rpcUrl)
+    const contract = new Contract(network.poolContract)
+    const kp = Keypair.random()
+    const account = {
+      accountId: () => kp.publicKey(),
+      sequenceNumber: () => '0',
+      incrementSequenceNumber() {},
+    }
+    const tx = new TransactionBuilder(account, { fee: '100', networkPassphrase: network.passphrase })
+      .addOperation(contract.call('get_commitments'))
+      .setTimeout(10)
+      .build()
+    const sim = await server.simulateTransaction(tx)
+    const val = SorobanRpc.Api.isSimulationSuccess(sim) ? sim.result?.retval : null
+    if (!val || val.switch().name !== 'scvVec') return []
+    return val.vec().map(v => ('0x' + Buffer.from(v.bytes()).toString('hex')))
   }
 
-  async function submitWithdraw() {
-    if (!proofJson.trim() || !secretKey.trim()) {
-      setError('Provide proof.json and your secret key.')
+  async function run() {
+    const usingFreighter = !!wallet.address
+    const dest = recipient.trim() || wallet.address
+    if (!note)  { setError('Upload your note.json first.'); return }
+    if (!dest)  { setError('Enter a recipient address or connect your Freighter wallet.'); return }
+    if (!usingFreighter && !secretKey.trim()) {
+      setError('Connect Freighter wallet or enter your secret key to pay fees.')
       return
     }
-    setStep('submitting')
+
     setError(null)
     setLog([])
+    setProgress(null)
+    setPhase('proving')
 
     try {
-      const { proof, meta } = JSON.parse(proofJson)
-      addLog('Parsed proof.json')
+      addLog('Fetching pool commitments from chain…')
+      const commitments = await fetchCommitmentsFromChain()
+      addLog(`Found ${commitments.length} commitment${commitments.length === 1 ? '' : 's'} in pool`)
 
-      const server = new SorobanRpc.Server(RPC_URL)
-      const kp = Keypair.fromSecret(secretKey.trim())
-      const account = await server.getAccount(kp.publicKey())
-      addLog('Account loaded')
+      const proofResult = await new Promise((resolve, reject) => {
+        const worker = new Worker(new URL('../proveWorker.js', import.meta.url), { type: 'module' })
+        workerRef.current = worker
+        worker.onmessage = ({ data }) => {
+          if (data.type === 'progress') {
+            setProgress({ step: data.step, total: data.total, msg: data.msg })
+            addLog(data.msg)
+          } else if (data.type === 'done') {
+            worker.terminate()
+            resolve(data)
+          } else if (data.type === 'error') {
+            worker.terminate()
+            reject(new Error(data.message))
+          }
+        }
+        worker.onerror = e => { worker.terminate(); reject(new Error(e.message)) }
+        worker.postMessage({ note, commitments, recipient: dest })
+      })
+
+      const { proof, meta } = proofResult
+      setProgress(null)
+      setPhase('submitting')
+      addLog('Proof generated ✓ — building withdrawal transaction…')
 
       const proofABytes = g1ToBytes(proof.pi_a)
       const proofBBytes = g2ToBytes(proof.pi_b)
       const proofCBytes = g1ToBytes(proof.pi_c)
-      const contract = new Contract(POOL_CONTRACT)
-      const recipientAddr = (recipient.trim() || meta.recipient)
 
-      addLog(`Recipient: ${recipientAddr.slice(0,12)}…`)
-      addLog('Building transaction…')
+      const signerAddress = usingFreighter
+        ? wallet.address
+        : Keypair.fromSecret(secretKey.trim()).publicKey()
 
-      const tx = new TransactionBuilder(account, { fee: '10000000', networkPassphrase: Networks.TESTNET })
+      const server = new SorobanRpc.Server(network.rpcUrl)
+      const account = await server.getAccount(signerAddress)
+      const contract = new Contract(network.poolContract)
+
+      const tx = new TransactionBuilder(account, { fee: '10000000', networkPassphrase: network.passphrase })
         .addOperation(contract.call(
           'withdraw',
           xdr.ScVal.scvBytes(proofABytes),
@@ -71,145 +135,176 @@ export default function WithdrawPanel({ onWithdrawn }) {
           xdr.ScVal.scvBytes(fieldToBytes32(meta.nullifierHash)),
           xdr.ScVal.scvAddress(
             xdr.ScAddress.scAddressTypeAccount(
-              xdr.PublicKey.publicKeyTypeEd25519(
-                Keypair.fromPublicKey(recipientAddr).rawPublicKey()
-              )
+              xdr.PublicKey.publicKeyTypeEd25519(Keypair.fromPublicKey(dest).rawPublicKey())
             )
           ),
           xdr.ScVal.scvI128(new xdr.Int128Parts({
-            hi: xdr.Int64.fromString('0'),
-            lo: xdr.Uint64.fromString(meta.amount),
+            hi:  xdr.Int64.fromString('0'),
+            lo:  xdr.Uint64.fromString(meta.amount),
           })),
         ))
         .setTimeout(30)
         .build()
 
-      addLog('Simulating…')
+      addLog('Simulating transaction…')
       const sim = await server.simulateTransaction(tx)
-      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error)
-
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error('Simulation failed: ' + sim.error)
       addLog('Simulation passed ✓')
+
       const prepared = SorobanRpc.assembleTransaction(tx, sim).build()
-      prepared.sign(kp)
 
-      addLog('Submitting to Stellar testnet…')
-      const send = await server.sendTransaction(prepared)
+      let send
+      if (usingFreighter) {
+        addLog('Approve in Freighter…')
+        const signedXdr = await wallet.sign(prepared, network.passphrase)
+        const signedTx = TransactionBuilder.fromXDR(signedXdr, network.passphrase)
+        send = await server.sendTransaction(signedTx)
+      } else {
+        const kp = Keypair.fromSecret(secretKey.trim())
+        prepared.sign(kp)
+        send = await server.sendTransaction(prepared)
+      }
+
       setTxHash(send.hash)
+      addLog(`TX submitted: ${send.hash.slice(0, 16)}…`)
 
-      await pollTx(send.hash)
-      addLog('Withdrawal confirmed!', 'success')
-      setStep('done')
-      onWithdrawn?.()
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        const poll = await server.getTransaction(send.hash)
+        if (poll.status === 'SUCCESS') {
+          addLog('Withdrawal confirmed ✓', 'success')
+          setPhase('done')
+          onWithdrawn?.()
+          return
+        }
+        if (poll.status === 'FAILED') throw new Error('Transaction failed on-chain')
+      }
+      throw new Error('Timeout waiting for confirmation')
     } catch (e) {
       setError(e.message)
       addLog(e.message, 'error')
-      setStep('idle')
+      setPhase('idle')
+      setProgress(null)
     }
   }
 
-  const note = noteJson ? tryParse(noteJson) : null
+  const busy = phase === 'proving' || phase === 'submitting'
+  const progressPct = progress ? Math.round((progress.step / progress.total) * 100) : 0
 
   return (
     <div>
       <h2 style={s.title}>Withdraw</h2>
       <p style={s.desc}>
-        Submit a ZK proof to withdraw funds from the pool to any address — without
-        revealing which deposit you're spending.
+        Upload your <code style={s.code}>note.json</code> — the app generates
+        the ZK proof in your browser and withdraws to any address you choose.
+        No CLI required.
       </p>
 
-      <div style={s.infoBox}>
-        <div style={s.infoTitle}>How to generate a proof</div>
-        <div style={s.infoBody}>
-          Proof generation runs off-chain (takes ~60s on a laptop). Run:
-          <pre style={s.pre}>{`node scripts/prove.js \\
-  --note your-note.json \\
-  --pool-db /tmp/pool_db.json \\
-  --asp-db /tmp/pool_db.json \\
-  --recipient GYOURADDRESS... \\
-  --out proof.json`}</pre>
-          Then upload <code style={s.code}>proof.json</code> below.
+      {/* Wallet status banner */}
+      {wallet.address ? (
+        <div style={s.walletBanner}>
+          <span style={s.dot} />
+          <span style={s.walletAddr}>
+            Connected: {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}
+          </span>
+          <span style={s.walletHint}>— will sign with Freighter</span>
         </div>
+      ) : (
+        <div style={s.noWalletBanner}>
+          No wallet connected — connect Freighter in the header, or enter a secret key below.
+        </div>
+      )}
+
+      {/* Note upload */}
+      <div style={s.section}>
+        <label style={s.label}>Upload note.json</label>
+        <div style={{ ...s.dropZone, ...(note ? s.dropZoneDone : {}) }} onClick={() => fileRef.current.click()}>
+          {note
+            ? <><span style={{ color: 'var(--green)', fontWeight: 600 }}>✓ note.json loaded</span><span style={{ color: 'var(--muted)', fontSize: 12, marginLeft: 8 }}>commitment: {BigInt(note.commitment).toString(16).slice(0, 12)}…</span></>
+            : <span>Click to upload note.json</span>
+          }
+        </div>
+        <input ref={fileRef} type="file" accept=".json" onChange={loadNoteFile} style={{ display: 'none' }} />
       </div>
 
-      {/* Proof upload */}
+      {/* Recipient */}
       <div style={s.section}>
-        <label style={s.label}>Upload proof.json</label>
-        <div
-          style={s.dropZone}
-          onClick={() => fileRef.current.click()}
-        >
-          {proofJson
-            ? <span style={{ color: 'var(--green)' }}>✓ proof.json loaded</span>
-            : <span>Click to upload proof.json</span>}
-        </div>
-        <input ref={fileRef} type="file" accept=".json" onChange={loadProofFile} style={{ display: 'none' }} />
-      </div>
-
-      {/* Proof summary */}
-      {proofJson && (() => {
-        const parsed = tryParse(proofJson)
-        if (!parsed?.meta) return null
-        return (
-          <div style={s.proofSummary}>
-            <Row label="Pool Root" value={parsed.meta.poolRoot ? `0x${BigInt(parsed.meta.poolRoot).toString(16).padStart(64,'0').slice(0,16)}…` : '—'} />
-            <Row label="Nullifier Hash" value={parsed.meta.nullifierHash ? `0x${BigInt(parsed.meta.nullifierHash).toString(16).padStart(64,'0').slice(0,16)}…` : '—'} />
-            <Row label="Amount" value={`${(BigInt(parsed.meta.amount) / 10_000_000n)} XLM`} />
-            <Row label="Recipient" value={`${parsed.meta.recipient?.slice(0,12)}…`} />
-          </div>
-        )
-      })()}
-
-      {/* Optional recipient override */}
-      <div style={s.section}>
-        <label style={s.label}>Recipient address (optional override)</label>
+        <label style={s.label}>
+          Recipient address
+          {wallet.address && <span style={s.labelHint}> (pre-filled from wallet)</span>}
+        </label>
         <input
-          placeholder={tryParse(proofJson)?.meta?.recipient || 'G… (defaults to address in proof)'}
+          placeholder="G… Stellar address to receive funds"
           value={recipient}
           onChange={e => setRecipient(e.target.value)}
           style={s.input}
         />
+        <p style={s.hint}>Can be any address — doesn't have to be the depositor.</p>
       </div>
 
-      {/* Secret key */}
-      <div style={s.section}>
-        <label style={s.label}>Your Stellar Secret Key (to sign + pay fees)</label>
-        <input
-          type="password"
-          placeholder="SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-          value={secretKey}
-          onChange={e => setSecretKey(e.target.value)}
-          style={s.input}
-        />
-      </div>
+      {/* Secret key fallback (only shown when no wallet) */}
+      {!wallet.address && (
+        <div style={s.section}>
+          <label style={s.label}>Secret Key <span style={s.labelHint}>(to pay fees)</span></label>
+          <input
+            type="password"
+            placeholder="SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+            value={secretKey}
+            onChange={e => setSecretKey(e.target.value)}
+            style={s.input}
+          />
+          <p style={s.hint}>Never sent to any server — stays in your browser.</p>
+        </div>
+      )}
 
-      {step !== 'done' && (
+      {/* Progress bar */}
+      {busy && (
+        <div style={s.progressBox}>
+          <div style={s.progressHeader}>
+            <span style={{ fontSize: 13, color: '#e2e8f0' }}>
+              {phase === 'proving' ? 'Generating ZK proof…' : 'Submitting to Stellar…'}
+            </span>
+            <span style={{ fontSize: 13, color: 'var(--accent)', fontWeight: 600 }}>
+              {phase === 'proving' ? `${progressPct}%` : ''}
+            </span>
+          </div>
+          {phase === 'proving' && (
+            <div style={s.progressTrack}>
+              <div style={{ ...s.progressFill, width: `${progressPct}%` }} />
+            </div>
+          )}
+          {progress?.msg && <div style={s.progressMsg}>{progress.msg}</div>}
+          {phase === 'proving' && <p style={s.provingNote}>Groth16 proof takes ~60s — don't close this tab.</p>}
+        </div>
+      )}
+
+      {/* Action button */}
+      {phase !== 'done' && (
         <button
-          onClick={submitWithdraw}
-          disabled={step === 'submitting' || !proofJson || !secretKey}
-          style={{
-            ...s.btn,
-            ...(step === 'submitting' || !proofJson || !secretKey ? s.btnDisabled : {}),
-          }}
+          onClick={run}
+          disabled={busy || !note || (!wallet.address && !secretKey.trim())}
+          style={{ ...s.btn, ...(busy || !note ? s.btnDisabled : {}) }}
         >
-          {step === 'submitting' ? '⟳ Verifying proof on-chain…' : '⚡ Verify & Withdraw'}
+          {phase === 'proving'   ? '⟳ Generating proof…' :
+           phase === 'submitting'? '⟳ Submitting…' :
+           '⚡ Generate Proof & Withdraw'}
         </button>
       )}
 
-      {step === 'done' && (
+      {/* Success */}
+      {phase === 'done' && (
         <div style={s.successBox}>
-          <div style={s.successIcon}>✅</div>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
           <div style={s.successText}>Withdrawal successful!</div>
           <a
-            href={`${EXPLORER_BASE}/tx/${txHash}`}
-            target="_blank"
-            rel="noreferrer"
+            href={`${network.explorerBase}/tx/${txHash}`}
+            target="_blank" rel="noreferrer"
             style={s.txLink}
           >
-            View TX on Stellar Expert ↗
+            View on Stellar Expert ↗
           </a>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 10 }}>
-            The Groth16 proof was verified by the on-chain BLS12-381 host functions.
-            No one can link this withdrawal to your original deposit.
+            The Groth16 proof was verified on-chain. No one can link this withdrawal to your deposit.
           </p>
         </div>
       )}
@@ -229,39 +324,34 @@ export default function WithdrawPanel({ onWithdrawn }) {
   )
 }
 
-function Row({ label, value }) {
-  return (
-    <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
-      <span style={{ fontSize: 12, color: 'var(--muted)', width: 110, flexShrink: 0 }}>{label}</span>
-      <span style={{ fontSize: 13, fontFamily: 'var(--mono)', color: '#e2e8f0' }}>{value}</span>
-    </div>
-  )
-}
-
-function tryParse(json) {
-  try { return JSON.parse(json) } catch { return null }
-}
-
 const s = {
   title: { fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 8 },
   desc: { fontSize: 14, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.6 },
-  infoBox: { background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: 10, padding: 16, marginBottom: 24 },
-  infoTitle: { fontWeight: 600, fontSize: 13, color: 'var(--accent)', marginBottom: 8 },
-  infoBody: { fontSize: 13, color: 'var(--muted)', lineHeight: 1.7 },
-  pre: { fontFamily: 'var(--mono)', fontSize: 12, marginTop: 8, padding: '10px 12px', background: 'var(--surface2)', borderRadius: 6, color: '#e2e8f0', overflowX: 'auto', border: '1px solid var(--border)' },
-  code: { fontFamily: 'var(--mono)', fontSize: 12, background: 'var(--surface2)', padding: '1px 5px', borderRadius: 4 },
-  section: { marginBottom: 16 },
-  label: { display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6 },
-  dropZone: { border: '1px dashed var(--border)', borderRadius: 8, padding: '20px', textAlign: 'center', cursor: 'pointer', fontSize: 14, color: 'var(--muted)', background: 'var(--surface2)' },
-  proofSummary: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16 },
-  input: { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: '#e2e8f0', fontSize: 13, fontFamily: 'var(--mono)', outline: 'none' },
+  code: { fontFamily: 'var(--mono)', fontSize: 13, background: 'var(--surface2)', padding: '1px 5px', borderRadius: 4, color: '#e2e8f0' },
+  walletBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', marginBottom: 20, fontSize: 13 },
+  dot: { width: 7, height: 7, borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981', flexShrink: 0 },
+  walletAddr: { fontFamily: 'var(--mono)', color: '#10b981', fontWeight: 600 },
+  walletHint: { color: 'var(--muted)', fontSize: 12 },
+  noWalletBanner: { padding: '8px 12px', borderRadius: 8, background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.2)', color: '#fbbf24', fontSize: 13, marginBottom: 20 },
+  section: { marginBottom: 18 },
+  label: { display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6, fontWeight: 500 },
+  labelHint: { fontSize: 11, color: '#475569', fontStyle: 'italic', fontWeight: 400 },
+  dropZone: { border: '1px dashed var(--border)', borderRadius: 8, padding: '18px 20px', textAlign: 'center', cursor: 'pointer', fontSize: 14, color: 'var(--muted)', background: 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  dropZoneDone: { borderColor: 'rgba(16,185,129,0.4)', background: 'rgba(16,185,129,0.05)' },
+  input: { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: '#e2e8f0', fontSize: 13, fontFamily: 'var(--mono)', outline: 'none', boxSizing: 'border-box' },
+  hint: { fontSize: 12, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 },
+  progressBox: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 16 },
+  progressHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  progressTrack: { height: 6, background: 'var(--border)', borderRadius: 99, overflow: 'hidden', marginBottom: 8 },
+  progressFill: { height: '100%', background: 'linear-gradient(90deg, var(--accent), #06b6d4)', borderRadius: 99, transition: 'width 0.4s ease' },
+  progressMsg: { fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--muted)' },
+  provingNote: { fontSize: 11, color: 'var(--muted)', marginTop: 8, fontStyle: 'italic' },
   btn: { width: '100%', padding: '11px 16px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', marginBottom: 12 },
   btnDisabled: { opacity: 0.4, cursor: 'not-allowed' },
   successBox: { textAlign: 'center', padding: '24px 0' },
-  successIcon: { fontSize: 40, marginBottom: 8 },
   successText: { fontWeight: 700, fontSize: 16, color: 'var(--green)', marginBottom: 8 },
   txLink: { fontSize: 13, color: 'var(--cyan)', display: 'block', marginBottom: 4 },
   error: { fontSize: 13, color: 'var(--red)', padding: '10px 12px', background: 'rgba(239,68,68,0.08)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.2)', marginTop: 12, wordBreak: 'break-all' },
-  logBox: { marginTop: 16, padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)' },
+  logBox: { marginTop: 16, padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)', maxHeight: 180, overflowY: 'auto' },
   logLine: { fontSize: 12, fontFamily: 'var(--mono)', marginBottom: 4, lineHeight: 1.5 },
 }

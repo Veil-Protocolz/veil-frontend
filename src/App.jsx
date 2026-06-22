@@ -62,13 +62,7 @@ function AppInner() {
           </div>
         </main>
         <aside style={styles.aside}>
-          {network.poolContract && (
-            <PoolStatus
-              rpcUrl={network.rpcUrl}
-              contractId={network.poolContract}
-              refreshTick={refreshTick}
-            />
-          )}
+          <PoolStatus refreshTick={refreshTick} />
         </aside>
       </div>
     </div>

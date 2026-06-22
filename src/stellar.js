@@ -18,7 +18,7 @@ export function fieldToBytes32(s) {
 }
 
 // Build a read-only (simulation-only) transaction for a contract call
-export function buildReadTx(contract, method) {
+export function buildReadTx(contract, method, networkPassphrase = Networks.TESTNET) {
   const kp = Keypair.random()
   const account = {
     accountId: () => kp.publicKey(),
@@ -27,7 +27,7 @@ export function buildReadTx(contract, method) {
   }
   return new TransactionBuilder(account, {
     fee: '100',
-    networkPassphrase: Networks.TESTNET,
+    networkPassphrase,
   })
     .addOperation(contract.call(method))
     .setTimeout(10)
