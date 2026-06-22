@@ -1,20 +1,20 @@
 /**
  * POST /api/update-roots
  *
- * Body (optional): { root: "0x..." }  — if provided, uses this root directly.
- * If no root is provided, computes it from on-chain commitments using Poseidon WASM.
+ * Phase 1 (no body): returns on-chain commitments so the frontend can compute root
+ * Phase 2 (body: { root, leaves }): submits update_pool_root + update_asp_root
  *
- * Required env var:  ADMIN_SECRET_KEY
+ * Required env var: ADMIN_SECRET_KEY
  */
 
-const {
+import {
   Keypair,
   TransactionBuilder,
   Networks,
   Contract,
   xdr,
-  rpc: SorobanRpc,
-} = require("@stellar/stellar-sdk");
+  rpc as SorobanRpc,
+} from "@stellar/stellar-sdk";
 
 const POOL_CONTRACT =
   process.env.POOL_CONTRACT ||
@@ -87,7 +87,7 @@ async function submitRootUpdate(server, adminKp, fn, rootHex) {
   throw new Error(fn + " timed out");
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -104,18 +104,15 @@ module.exports = async function handler(req, res) {
     const server = new SorobanRpc.Server(RPC_URL);
     const adminKp = Keypair.fromSecret(adminSecret);
 
-    // Accept a pre-computed root from the frontend (avoids WASM in serverless)
-    let rootHex = req.body?.root;
-    let leaves = req.body?.leaves ?? null;
+    const rootHex = req.body?.root;
+    const leaves = req.body?.leaves ?? null;
 
     if (!rootHex) {
-      // Fallback: fetch commitments and return them so frontend can compute root
       const commitments = await getCommitmentsFromChain(server);
       res.status(200).json({ ok: false, needsRoot: true, commitments });
       return;
     }
 
-    // Validate: rootHex must be a 32-byte hex string
     const clean = rootHex.replace("0x", "");
     if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
       res.status(400).json({ error: "Invalid root format" });
@@ -139,4 +136,4 @@ module.exports = async function handler(req, res) {
     console.error("update-roots error:", e);
     res.status(500).json({ error: e.message });
   }
-};
+}
