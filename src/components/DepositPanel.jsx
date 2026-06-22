@@ -90,11 +90,20 @@ export default function DepositPanel({ onDeposited }) {
       if (usingFreighter) {
         addLog('Approve in Freighter…')
         const signedXdr = await wallet.sign(prepared, network.passphrase)
+        addLog('Got signed XDR from Freighter ✓')
         const signedTx  = TransactionBuilder.fromXDR(signedXdr, network.passphrase)
         send = await server.sendTransaction(signedTx)
       } else {
         prepared.sign(Keypair.fromSecret(secretKey.trim()))
         send = await server.sendTransaction(prepared)
+      }
+
+      addLog(`Send status: ${send.status}`)
+      if (send.status === 'ERROR') {
+        throw new Error(`Transaction rejected by network: ${send.errorResultXdr ?? 'unknown error'}`)
+      }
+      if (send.status === 'TRY_AGAIN_LATER') {
+        throw new Error('Network is busy — please try again in a moment')
       }
 
       setTxHash(send.hash)
