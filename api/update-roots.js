@@ -1,22 +1,21 @@
 /**
- * POST /api/update-roots  (CommonJS — avoids stellar-sdk ESM build issues)
+ * POST /api/update-roots
  *
  * Phase 1 — body: {}             → returns on-chain commitments for frontend to compute root
  * Phase 2 — body: {root, leaves} → submits update_pool_root + update_asp_root on-chain
  *
+ * Requires Node >=22 (stellar-sdk v16 constraint). Set in package.json engines field.
  * Vercel limit: 60s. Pool TX polls 8×3s=24s, ASP TX polls 8×3s=24s → ~50s worst case.
  */
 
-"use strict";
-
-const {
+import {
   Keypair,
   TransactionBuilder,
   Networks,
   Contract,
   xdr,
-  rpc: SorobanRpc,
-} = require("@stellar/stellar-sdk");
+  rpc as SorobanRpc,
+} from "@stellar/stellar-sdk";
 
 const POOL_CONTRACT =
   process.env.POOL_CONTRACT ||
@@ -90,7 +89,7 @@ async function submitRootUpdate(server, adminKp, fn, rootHex) {
   return { hash: send.hash, confirmed: false };
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
