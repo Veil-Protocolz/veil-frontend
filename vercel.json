@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/update-roots.cjs": {
+    "api/update-roots.js": {
       "maxDuration": 60
     }
   }
