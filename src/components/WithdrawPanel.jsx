@@ -3,6 +3,7 @@ import { rpc as SorobanRpc, Contract, TransactionBuilder, xdr, Keypair } from '@
 import { useNetwork } from '../NetworkContext'
 import { useWallet } from '../WalletContext'
 import { g1ToBytes, g2ToBytes, fieldToBytes32 } from '../stellar'
+import { poseidon2 } from '../lib/poseidon'
 
 export default function WithdrawPanel({ onWithdrawn }) {
   const { network } = useNetwork()
@@ -68,6 +69,66 @@ export default function WithdrawPanel({ onWithdrawn }) {
     return val.vec().map(v => ('0x' + Buffer.from(v.bytes()).toString('hex')))
   }
 
+  async function computeExpectedRoot(commitments) {
+    const LEVELS = 20
+    let zeros = [0n]
+    for (let i = 1; i <= LEVELS; i++) zeros.push(await poseidon2(zeros[i - 1], zeros[i - 1]))
+    let layer = commitments.map(c => BigInt(c))
+    for (let lvl = 0; lvl < LEVELS; lvl++) {
+      const next = []
+      const size = Math.max(Math.ceil(layer.length / 2), 1)
+      for (let i = 0; i < size; i++)
+        next.push(await poseidon2(layer[i * 2] ?? zeros[lvl], layer[i * 2 + 1] ?? zeros[lvl]))
+      layer = next
+    }
+    return '0x' + (layer[0] ?? zeros[LEVELS]).toString(16).padStart(64, '0')
+  }
+
+  async function readOnChainRoot(server, contract, method) {
+    const kp = Keypair.random()
+    const dummy = { accountId: () => kp.publicKey(), sequenceNumber: () => '0', incrementSequenceNumber() {} }
+    const tx = new TransactionBuilder(dummy, { fee: '100', networkPassphrase: network.passphrase })
+      .addOperation(contract.call(method)).setTimeout(30).build()
+    const sim = await server.simulateTransaction(tx)
+    if (!SorobanRpc.Api.isSimulationSuccess(sim)) return null
+    const retval = sim.result?.retval
+    if (!retval || retval.switch().name !== 'scvBytes') return null
+    return '0x' + Buffer.from(retval.bytes()).toString('hex')
+  }
+
+  async function ensureRootsInSync(server, contract, expectedRoot, commitmentCount) {
+    const [poolRoot, aspRoot] = await Promise.all([
+      readOnChainRoot(server, contract, 'get_pool_root'),
+      readOnChainRoot(server, contract, 'get_asp_root'),
+    ])
+    const poolOk = poolRoot === expectedRoot
+    const aspOk  = aspRoot  === expectedRoot
+    if (poolOk && aspOk) return
+
+    addLog(`Root mismatch detected — auto-syncing (pool:${poolOk ? '✓' : '✗'} asp:${aspOk ? '✓' : '✗'})…`)
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch('/api/update-roots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ root: expectedRoot, leaves: commitmentCount }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json()
+        if (data.ok) {
+          addLog(data.partial ? 'Roots submitted (confirming in background) ✓' : 'Roots synced ✓', 'success')
+          return
+        }
+        throw new Error(data.error ?? 'Unknown error')
+      } catch (e) {
+        if (attempt >= 3) throw new Error(`Root sync failed after 3 attempts: ${e.message}`)
+        addLog(`Sync attempt ${attempt} failed — retrying…`)
+        await new Promise(r => setTimeout(r, 2000))
+      }
+    }
+  }
+
   async function run() {
     const usingFreighter = !!wallet.address
     const dest = recipient.trim() || wallet.address
@@ -87,6 +148,15 @@ export default function WithdrawPanel({ onWithdrawn }) {
       addLog('Fetching pool commitments from chain…')
       const commitments = await fetchCommitmentsFromChain()
       addLog(`Found ${commitments.length} commitment${commitments.length === 1 ? '' : 's'} in pool`)
+
+      // Self-healing: verify on-chain roots match current commitments before proving.
+      // This prevents wasting 60s generating a proof that will fail on simulation.
+      addLog('Verifying pool state…')
+      const server = new SorobanRpc.Server(network.rpcUrl)
+      const contract = new Contract(network.poolContract)
+      const expectedRoot = await computeExpectedRoot(commitments)
+      await ensureRootsInSync(server, contract, expectedRoot, commitments.length)
+      addLog('Pool state verified ✓')
 
       const proofResult = await new Promise((resolve, reject) => {
         const worker = new Worker(new URL('../proveWorker.js', import.meta.url), { type: 'module' })
@@ -120,9 +190,7 @@ export default function WithdrawPanel({ onWithdrawn }) {
         ? wallet.address
         : Keypair.fromSecret(secretKey.trim()).publicKey()
 
-      const server = new SorobanRpc.Server(network.rpcUrl)
       const account = await server.getAccount(signerAddress)
-      const contract = new Contract(network.poolContract)
 
       const tx = new TransactionBuilder(account, { fee: '10000000', networkPassphrase: network.passphrase })
         .addOperation(contract.call(

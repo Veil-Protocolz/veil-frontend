@@ -46,6 +46,57 @@ export default function DepositPanel({ onDeposited }) {
     }
   }
 
+  async function syncRootAfterDeposit() {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        if (attempt > 1) {
+          addLog(`Root update retry ${attempt}/3…`)
+          await new Promise(r => setTimeout(r, 3000))
+        }
+        // Phase 1: get current commitments from chain
+        const commitmentsRes = await fetch('/api/update-roots', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+        })
+        if (!commitmentsRes.ok) throw new Error(`Server error ${commitmentsRes.status}`)
+        const commitmentsData = await commitmentsRes.json()
+        if (!commitmentsData.needsRoot) throw new Error(commitmentsData.error ?? 'Unexpected API response')
+
+        // Phase 2: compute root locally using Poseidon WASM
+        const LEVELS = 20
+        let zeros = [0n]
+        for (let i = 1; i <= LEVELS; i++) zeros.push(await poseidon2(zeros[i - 1], zeros[i - 1]))
+        let layer = commitmentsData.commitments.map(c => BigInt(c))
+        for (let lvl = 0; lvl < LEVELS; lvl++) {
+          const next = []
+          const size = Math.max(Math.ceil(layer.length / 2), 1)
+          for (let i = 0; i < size; i++)
+            next.push(await poseidon2(layer[i * 2] ?? zeros[lvl], layer[i * 2 + 1] ?? zeros[lvl]))
+          layer = next
+        }
+        const newRoot = '0x' + (layer[0] ?? zeros[LEVELS]).toString(16).padStart(64, '0')
+        addLog(`Root computed for ${commitmentsData.commitments.length} deposit(s)`)
+
+        // Phase 3: submit root to chain via API
+        const rootRes = await fetch('/api/update-roots', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ root: newRoot, leaves: commitmentsData.commitments.length })
+        })
+        if (!rootRes.ok) throw new Error(`Server error ${rootRes.status}`)
+        const rootData = await rootRes.json()
+        if (rootData.ok) {
+          addLog(rootData.partial ? 'Root submitted (finalizing on-chain) ✓' : 'Root updated ✓', 'success')
+          return // success
+        }
+        throw new Error(rootData.error ?? 'Root update failed')
+      } catch (e) {
+        if (attempt >= 3) {
+          addLog(`Root update failed — your deposit is safe. Withdrawals will auto-sync.`, 'error')
+          return // non-fatal: withdraw self-heals
+        }
+      }
+    }
+  }
+
   async function submitDeposit() {
     const usingFreighter = !!wallet.address && !showSecretKey
     if (!note) { setError('Generate a note first.'); return }
@@ -115,35 +166,8 @@ export default function DepositPanel({ onDeposited }) {
         const poll = await server.getTransaction(send.hash)
         if (poll.status === 'SUCCESS') {
           addLog('Deposit confirmed ✓', 'success')
-          addLog('Computing new Merkle root…')
-          try {
-            // 1. Fetch current commitments from chain
-            const commitmentsRes = await fetch('/api/update-roots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
-            const commitmentsData = await commitmentsRes.json()
-            if (!commitmentsData.needsRoot) throw new Error(commitmentsData.error ?? 'Unexpected response')
-
-            // 2. Compute root from commitments using local Poseidon WASM
-            const LEVELS = 20
-            let zeros = [0n]
-            for (let i = 1; i <= LEVELS; i++) zeros.push(await poseidon2(zeros[i-1], zeros[i-1]))
-            let layer = commitmentsData.commitments.map(c => BigInt(c))
-            for (let lvl = 0; lvl < LEVELS; lvl++) {
-              const next = []
-              const size = Math.max(Math.ceil(layer.length / 2), 1)
-              for (let i = 0; i < size; i++) next.push(await poseidon2(layer[i*2] ?? zeros[lvl], layer[i*2+1] ?? zeros[lvl]))
-              layer = next
-            }
-            const newRoot = '0x' + (layer[0] ?? zeros[LEVELS]).toString(16).padStart(64, '0')
-            addLog(`Root computed (${commitmentsData.commitments.length} deposits)`)
-
-            // 3. Send root to API to submit on-chain
-            const rootRes = await fetch('/api/update-roots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root: newRoot, leaves: commitmentsData.commitments.length }) })
-            const rootData = await rootRes.json()
-            if (rootData.ok) addLog(`Root updated on-chain ✓`, 'success')
-            else addLog('Root update failed: ' + rootData.error, 'error')
-          } catch (e) {
-            addLog('Root update failed: ' + e.message, 'error')
-          }
+          addLog('Updating pool Merkle root…')
+          await syncRootAfterDeposit()
           setStep('done')
           onDeposited?.()
           return
