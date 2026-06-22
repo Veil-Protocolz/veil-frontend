@@ -100,8 +100,8 @@ export default function DepositPanel({ onDeposited }) {
       setTxHash(send.hash)
       addLog(`TX submitted: ${send.hash.slice(0, 16)}…`)
 
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 2000))
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 3000))
         const poll = await server.getTransaction(send.hash)
         if (poll.status === 'SUCCESS') {
           addLog('Deposit confirmed ✓', 'success')
@@ -119,8 +119,12 @@ export default function DepositPanel({ onDeposited }) {
           return
         }
         if (poll.status === 'FAILED') throw new Error('Transaction failed on-chain')
+        // NOT_FOUND = still pending, keep polling
       }
-      throw new Error('Timeout waiting for confirmation')
+      // Timed out but TX may still confirm — show hash so user can verify
+      setStep('done')
+      addLog('Timed out waiting — TX may still confirm. Check Explorer.', 'error')
+      onDeposited?.()
     } catch (e) {
       setError(e.message)
       addLog(e.message, 'error')
