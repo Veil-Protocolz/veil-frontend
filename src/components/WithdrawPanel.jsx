@@ -20,10 +20,14 @@ export default function WithdrawPanel({ onWithdrawn }) {
   const fileRef                     = useRef()
   const workerRef                   = useRef()
 
-  // Pre-fill recipient from connected wallet
+  // Pre-fill recipient from connected wallet only on first connect
   useEffect(() => {
     if (wallet.address && !recipient) setRecipient(wallet.address)
   }, [wallet.address])
+
+  function isValidStellarAddress(addr) {
+    return /^G[A-Z2-7]{55}$/.test(addr.trim())
+  }
 
   // Cleanup worker on unmount
   useEffect(() => () => workerRef.current?.terminate(), [])
@@ -131,9 +135,13 @@ export default function WithdrawPanel({ onWithdrawn }) {
 
   async function run() {
     const usingFreighter = !!wallet.address
-    const dest = recipient.trim() || wallet.address
+    const dest = recipient.trim()
     if (!note)  { setError('Upload your note.json first.'); return }
-    if (!dest)  { setError('Enter a recipient address or connect your Freighter wallet.'); return }
+    if (!dest)  { setError('Enter the recipient address.'); return }
+    if (!isValidStellarAddress(dest)) {
+      setError('Invalid recipient address — must be a valid Stellar address starting with G.')
+      return
+    }
     if (!usingFreighter && !secretKey.trim()) {
       setError('Connect Freighter wallet or enter your secret key to pay fees.')
       return
@@ -308,19 +316,46 @@ export default function WithdrawPanel({ onWithdrawn }) {
         <input ref={fileRef} type="file" accept=".json" onChange={loadNoteFile} style={{ display: 'none' }} />
       </div>
 
-      {/* Recipient */}
+      {/* Recipient — core privacy feature: can be ANY address */}
       <div style={s.section}>
-        <label style={s.label}>
-          Recipient address
-          {wallet.address && <span style={s.labelHint}> (pre-filled from wallet)</span>}
-        </label>
+        <div style={s.recipientHeader}>
+          <label style={{ ...s.label, marginBottom: 0 }}>Recipient address</label>
+          <div style={s.recipientActions}>
+            {wallet.address && recipient !== wallet.address && (
+              <button style={s.addrBtn} onClick={() => setRecipient(wallet.address)}>
+                Use my wallet
+              </button>
+            )}
+            {recipient && (
+              <button style={s.addrBtn} onClick={() => setRecipient('')}>
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
         <input
-          placeholder="G… Stellar address to receive funds"
+          placeholder="G… enter any Stellar address"
           value={recipient}
           onChange={e => setRecipient(e.target.value)}
-          style={s.input}
+          style={{
+            ...s.input,
+            borderColor: recipient && !isValidStellarAddress(recipient)
+              ? 'rgba(239,68,68,0.5)'
+              : 'var(--border)',
+          }}
+          spellCheck={false}
+          autoComplete="off"
         />
-        <p style={s.hint}>Can be any address — doesn't have to be the depositor.</p>
+        {recipient && !isValidStellarAddress(recipient) && (
+          <p style={s.inputError}>Not a valid Stellar address</p>
+        )}
+        <div style={s.privacyHint}>
+          <span style={s.privacyIcon}>🔒</span>
+          <span>
+            This can be <strong>any</strong> Stellar address — using a different address
+            from the depositor breaks the link between deposit and withdrawal.
+          </span>
+        </div>
       </div>
 
       {/* Secret key fallback (only shown when no wallet) */}
@@ -417,6 +452,12 @@ const s = {
   section: { marginBottom: 18 },
   label: { display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6, fontWeight: 500 },
   labelHint: { fontSize: 11, color: '#475569', fontStyle: 'italic', fontWeight: 400 },
+  recipientHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  recipientActions: { display: 'flex', gap: 6 },
+  addrBtn: { background: 'none', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--muted)', fontSize: 11, padding: '2px 8px', cursor: 'pointer' },
+  inputError: { fontSize: 11, color: 'var(--red)', marginTop: 4 },
+  privacyHint: { display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 8, padding: '8px 10px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: 6, fontSize: 12, color: '#94a3b8', lineHeight: 1.5 },
+  privacyIcon: { flexShrink: 0, fontSize: 13 },
   dropZone: { border: '1px dashed var(--border)', borderRadius: 8, padding: '18px 20px', textAlign: 'center', cursor: 'pointer', fontSize: 14, color: 'var(--muted)', background: 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 },
   dropZoneDone: { borderColor: 'rgba(16,185,129,0.4)', background: 'rgba(16,185,129,0.05)' },
   input: { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: '#e2e8f0', fontSize: 13, fontFamily: 'var(--mono)', outline: 'none', boxSizing: 'border-box' },
